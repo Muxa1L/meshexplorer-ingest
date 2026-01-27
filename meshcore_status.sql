@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS meshcore_status
 (
-    timestamp DateTime64(6) COMMENT 'Status timestamp from MQTT message',
+    timestamp DateTime64(6, 'UTC') COMMENT 'Status timestamp from MQTT message in UTC',
     broker String COMMENT 'MQTT broker URL',
     topic LowCardinality(String) COMMENT 'MQTT topic name',
     origin String COMMENT 'Node origin identifier',

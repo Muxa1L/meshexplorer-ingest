@@ -128,7 +128,7 @@ class ClickHouseManager:
             broker_url = f"tcp://{self.config.mqtt_host}:{self.config.mqtt_port}"
             
             data = [
-                packet_data['timestamp'],
+                packet_data['timestamp']+'+00',
                 broker_url,
                 self.config.mqtt_topic.lower(),
                 packet_data['origin'],
@@ -262,7 +262,7 @@ class ClickHouseManager:
             ]
             
             data = [
-                status_data['timestamp'],
+                status_data['timestamp']+'+00',
                 broker_url,
                 self.config.mqtt_topic.lower(),
                 status_data['origin'],
