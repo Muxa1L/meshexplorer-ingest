@@ -239,6 +239,90 @@ class ClickHouseManager:
         except Exception as e:
             logger.error(f"Failed to insert advert: {e}", exc_info=True)
             return False
+    
+    def insert_status(self, status_data: Dict[str, Any]) -> bool:
+        """
+        Insert node status data into the meshcore_status table.
+        
+        Args:
+            status_data: Status data from MQTT
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            client = self.get_client()
+            
+            stats = status_data.get('stats', {})
+            broker_url = f"tcp://{self.config.mqtt_host}:{self.config.mqtt_port}"
+            
+            columns = [
+                'timestamp', 'broker', 'topic', 'origin', 'origin_pubkey',
+                'status', 'model', 'firmware_version', 'radio', 'client_version'
+            ]
+            
+            data = [
+                status_data['timestamp'],
+                broker_url,
+                self.config.mqtt_topic.lower(),
+                status_data['origin'],
+                binascii.unhexlify(status_data['origin_id'])
+            ]
+            
+            # Add basic status fields
+            data.extend([
+                status_data.get('status', 'unknown'),
+                status_data.get('model', ''),
+                status_data.get('firmware_version', ''),
+                status_data.get('radio', ''),
+                status_data.get('client_version', '')
+            ])
+            
+            # Add stats if present
+            if stats:
+                if 'battery_mv' in stats:
+                    columns.append('battery_mv')
+                    data.append(stats['battery_mv'])
+                
+                if 'uptime_secs' in stats:
+                    columns.append('uptime_secs')
+                    data.append(stats['uptime_secs'])
+                
+                if 'errors' in stats:
+                    columns.append('errors')
+                    data.append(stats['errors'])
+                
+                if 'queue_len' in stats:
+                    columns.append('queue_len')
+                    data.append(stats['queue_len'])
+                
+                if 'noise_floor' in stats:
+                    columns.append('noise_floor')
+                    data.append(stats['noise_floor'])
+                
+                if 'last_rssi' in stats:
+                    columns.append('last_rssi')
+                    data.append(stats['last_rssi'])
+                
+                if 'last_snr' in stats:
+                    columns.append('last_snr')
+                    data.append(stats['last_snr'])
+                
+                if 'tx_air_secs' in stats:
+                    columns.append('tx_air_secs')
+                    data.append(stats['tx_air_secs'])
+                
+                if 'rx_air_secs' in stats:
+                    columns.append('rx_air_secs')
+                    data.append(stats['rx_air_secs'])
+            
+            client.insert('meshcore_status', [data], column_names=columns)
+            logger.info(f"Inserted status from: {status_data['origin']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to insert status: {e}", exc_info=True)
+            return False
 
 
 class MeshCoreIngester:
@@ -257,9 +341,13 @@ class MeshCoreIngester:
             logger.info(f"Connected to MQTT broker at {self.config.mqtt_host}:{self.config.mqtt_port}")
             
             # Subscribe to topics
-            topic = f"{self.config.mqtt_topic}/+/raw"
-            client.subscribe(topic)
-            logger.info(f"Subscribed to topic: {topic}")
+            raw_topic = f"{self.config.mqtt_topic}/+/raw"
+            client.subscribe(raw_topic)
+            logger.info(f"Subscribed to topic: {raw_topic}")
+            
+            status_topic = f"{self.config.mqtt_topic}/+/status"
+            client.subscribe(status_topic)
+            logger.info(f"Subscribed to topic: {status_topic}")
         else:
             logger.error(f"Failed to connect to MQTT broker, reason code: {reason_code}")
     
@@ -274,21 +362,31 @@ class MeshCoreIngester:
         """Callback for when a PUBLISH message is received from the server."""
         try:
             data = json.loads(msg.payload)
-            hex_data = data.get('data')
             
-            if not hex_data:
-                logger.warning(f"Received message without data field on topic {msg.topic}")
-                return
-            
-            # Decode packet to check type
-            packet = MeshCoreDecoder.decode(hex_data)
-            
-            # Insert packet data
-            self.db_manager.insert_packet(data)
-            
-            # Insert advert if present
-            if packet.payload_type == PayloadType.Advert and packet.payload.get('decoded'):
-                self.db_manager.insert_advert(data)
+            # Determine message type based on topic
+            if msg.topic.endswith('/status'):
+                # Handle status message
+                self.db_manager.insert_status(data)
+                
+            elif msg.topic.endswith('/raw'):
+                # Handle raw packet message
+                hex_data = data.get('data')
+                
+                if not hex_data:
+                    logger.warning(f"Received message without data field on topic {msg.topic}")
+                    return
+                
+                # Decode packet to check type
+                packet = MeshCoreDecoder.decode(hex_data)
+                
+                # Insert packet data
+                self.db_manager.insert_packet(data)
+                
+                # Insert advert if present
+                if packet.payload_type == PayloadType.Advert and packet.payload.get('decoded'):
+                    self.db_manager.insert_advert(data)
+            else:
+                logger.warning(f"Received message on unknown subtopic: {msg.topic}")
                 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON message: {e}")
