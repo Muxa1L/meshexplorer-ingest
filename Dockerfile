@@ -31,7 +31,7 @@ ENV MQTT_HOST=localhost
 ENV MQTT_PORT=1883
 ENV MQTT_USER=meshcore
 ENV MQTT_PASS=meshcore
-ENV MQTT_TOPIC=meshcore/KRR
+ENV MQTT_TOPIC=meshcore
 
 # Run the ingester when container launches
 CMD ["python", "-u", "ingester.py"]

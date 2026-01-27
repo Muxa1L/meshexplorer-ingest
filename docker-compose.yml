@@ -17,7 +17,8 @@ services:
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_USER: ${MQTT_USER:-meshcore}
       MQTT_PASS: ${MQTT_PASS:-meshcore}
-      MQTT_TOPIC: ${MQTT_TOPIC:-meshcore/KRR}
+      MQTT_TOPIC: ${MQTT_TOPIC:-meshcore}
+
     
     # Uncomment below to use host network (useful for local development)
     # network_mode: host

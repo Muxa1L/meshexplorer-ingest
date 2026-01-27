@@ -77,7 +77,7 @@ docker-compose down
 | `MQTT_PORT` | MQTT broker port | `1883` |
 | `MQTT_USER` | MQTT username | `meshcore` |
 | `MQTT_PASS` | MQTT password | `meshcore` |
-| `MQTT_TOPIC` | MQTT topic | `meshcore/KRR` |
+| `MQTT_TOPIC` | MQTT topic prefix | `meshcore` |
 
 ## Troubleshooting
 
