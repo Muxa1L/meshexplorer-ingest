@@ -263,7 +263,7 @@ class MeshCoreIngester:
         else:
             logger.error(f"Failed to connect to MQTT broker, reason code: {reason_code}")
     
-    def _on_disconnect(self, client: mqtt.Client, userdata: Any, reason_code: int):
+    def _on_disconnect(self, client: mqtt.Client, userdata: Any, reason_code: int, disconnect_flags: Any):
         """Callback for when the client disconnects from the broker."""
         if reason_code != 0:
             logger.warning(f"Unexpected disconnect from MQTT broker, reason code: {reason_code}")
