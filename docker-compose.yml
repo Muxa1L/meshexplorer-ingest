@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  ingester:
+    build: .
+    container_name: meshexplorer-ingester
+    restart: unless-stopped
+    environment:
+      # ClickHouse connection settings
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASS: ${CLICKHOUSE_PASS:-}
+      
+      # MQTT connection settings
+      MQTT_HOST: ${MQTT_HOST:-192.168.1.20}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USER: ${MQTT_USER:-meshcore}
+      MQTT_PASS: ${MQTT_PASS:-meshcore}
+      MQTT_TOPIC: ${MQTT_TOPIC:-meshcore/KRR}
+    
+    # Uncomment below to use host network (useful for local development)
+    # network_mode: host
+    
+    # Or use custom network
+    networks:
+      - meshexplorer-network
+
+networks:
+  meshexplorer-network:
+    driver: bridge
