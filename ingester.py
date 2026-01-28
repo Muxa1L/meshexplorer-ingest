@@ -210,21 +210,22 @@ class ClickHouseManager:
     
     def get_client(self) -> ClickHouseClient:
         """Get or create ClickHouse client connection."""
-        if self._client is None:
-            try:
+        
+        try:
+            if self._client is None:
                 self._client = clickhouse_connect.get_client(
                     host=self.config.clickhouse_host,
                     port=self.config.clickhouse_port,
                     username=self.config.clickhouse_user,
                     password=self.config.clickhouse_pass
                 )
-                self._client.command('SELECT 1')
                 logger.info(f"Connected to ClickHouse at {self.config.clickhouse_host}:{self.config.clickhouse_port}")
-                self._clickhouse_available = True
-            except Exception as e:
-                logger.error(f"Failed to connect to ClickHouse: {e}")
-                self._clickhouse_available = False
-                raise
+            self._client.command('SELECT 1')
+            self._clickhouse_available = True
+        except Exception as e:
+            logger.error(f"Failed to connect to ClickHouse: {e}")
+            self._clickhouse_available = False
+            raise
         return self._client
     
     def is_available(self) -> bool:
