@@ -230,6 +230,7 @@ class ClickHouseManager:
     
     def is_available(self) -> bool:
         """Check if ClickHouse is available."""
+        self.get_client()
         return self._clickhouse_available
     
     def close(self):
