@@ -51,6 +51,9 @@ class Config:
     mqtt_pass: str
     mqtt_topic: str
     
+    # Queue settings
+    queue_db_path: str = "queue.db"
+    
     @classmethod
     def from_env(cls) -> 'Config':
         """Load configuration from environment variables."""
@@ -64,7 +67,8 @@ class Config:
                 mqtt_port=int(os.environ['MQTT_PORT']),
                 mqtt_user=os.environ['MQTT_USER'],
                 mqtt_pass=os.environ['MQTT_PASS'],
-                mqtt_topic=os.environ['MQTT_TOPIC']
+                mqtt_topic=os.environ['MQTT_TOPIC'],
+                queue_db_path=os.environ.get('QUEUE_DB_PATH', 'queue.db')
             )
         except KeyError as e:
             logger.error(f"Missing required environment variable: {e}")
@@ -518,7 +522,7 @@ class MeshCoreIngester:
     
     def __init__(self, config: Config):
         self.config = config
-        self.queue = PersistentQueue()
+        self.queue = PersistentQueue(db_path=config.queue_db_path)
         self.db_manager = ClickHouseManager(config, self.queue)
         self.mqtt_client: Optional[mqtt.Client] = None
         self._running = False

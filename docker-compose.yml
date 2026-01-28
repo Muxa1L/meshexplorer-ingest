@@ -18,7 +18,13 @@ services:
       MQTT_USER: ${MQTT_USER:-meshcore}
       MQTT_PASS: ${MQTT_PASS:-meshcore}
       MQTT_TOPIC: ${MQTT_TOPIC:-meshcore}
-
+      
+      # Queue settings
+      QUEUE_DB_PATH: ${QUEUE_DB_PATH:-/app/data/queue.db}
+    
+    # Volume for persistent queue database
+    volumes:
+      - queue-data:/app/data
     
     # Uncomment below to use host network (useful for local development)
     # network_mode: host
@@ -30,3 +36,7 @@ services:
 networks:
   meshexplorer-network:
     driver: bridge
+
+volumes:
+  queue-data:
+    driver: local

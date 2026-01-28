@@ -33,5 +33,10 @@ ENV MQTT_USER=meshcore
 ENV MQTT_PASS=meshcore
 ENV MQTT_TOPIC=meshcore
 
+ENV QUEUE_DB_PATH=/app/data/queue.db
+
+# Create directory for persistent queue database
+RUN mkdir -p /app/data
+
 # Run the ingester when container launches
 CMD ["python", "-u", "ingester.py"]
