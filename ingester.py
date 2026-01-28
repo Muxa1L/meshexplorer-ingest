@@ -9,9 +9,13 @@ import sys
 import json
 import logging
 import binascii
+import sqlite3
+import threading
+import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import clickhouse_connect
@@ -70,12 +74,135 @@ class Config:
             raise
 
 
+class PersistentQueue:
+    """SQLite-based persistent queue for storing messages when ClickHouse is unavailable."""
+    
+    def __init__(self, db_path: str = "queue.db"):
+        """Initialize the persistent queue."""
+        self.db_path = db_path
+        self.lock = threading.Lock()
+        self._init_db()
+        logger.info(f"Initialized persistent queue at {db_path}")
+    
+    def _init_db(self):
+        """Initialize the SQLite database."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS message_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_created_at ON message_queue(created_at)")
+            conn.commit()
+    
+    def enqueue(self, message_type: str, payload: Dict[str, Any]) -> bool:
+        """
+        Add a message to the queue.
+        
+        Args:
+            message_type: Type of message ('packet', 'advert', 'status')
+            payload: Message payload as dictionary
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute(
+                        "INSERT INTO message_queue (message_type, payload) VALUES (?, ?)",
+                        (message_type, json.dumps(payload))
+                    )
+                    conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to enqueue message: {e}")
+            return False
+    
+    def dequeue_batch(self, batch_size: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get a batch of messages from the queue.
+        
+        Args:
+            batch_size: Maximum number of messages to retrieve
+            
+        Returns:
+            List of messages with id, message_type, and payload
+        """
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.execute(
+                        "SELECT id, message_type, payload FROM message_queue ORDER BY id LIMIT ?",
+                        (batch_size,)
+                    )
+                    rows = cursor.fetchall()
+                    
+                    messages = []
+                    for row in rows:
+                        messages.append({
+                            'id': row[0],
+                            'message_type': row[1],
+                            'payload': json.loads(row[2])
+                        })
+                    return messages
+        except Exception as e:
+            logger.error(f"Failed to dequeue messages: {e}")
+            return []
+    
+    def delete_messages(self, message_ids: List[int]) -> bool:
+        """
+        Delete messages from the queue by their IDs.
+        
+        Args:
+            message_ids: List of message IDs to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not message_ids:
+            return True
+            
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    placeholders = ','.join('?' * len(message_ids))
+                    conn.execute(
+                        f"DELETE FROM message_queue WHERE id IN ({placeholders})",
+                        message_ids
+                    )
+                    conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete messages: {e}")
+            return False
+    
+    def get_queue_size(self) -> int:
+        """Get the current size of the queue."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM message_queue")
+                return cursor.fetchone()[0]
+        except Exception as e:
+            logger.error(f"Failed to get queue size: {e}")
+            return 0
+    
+    def close(self):
+        """Clean up resources."""
+        pass  # SQLite connections are managed per-operation
+
+
 class ClickHouseManager:
     """Manages ClickHouse database connections and operations."""
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, queue: PersistentQueue):
         self.config = config
+        self.queue = queue
         self._client: Optional[ClickHouseClient] = None
+        self._clickhouse_available = True
     
     def get_client(self) -> ClickHouseClient:
         """Get or create ClickHouse client connection."""
@@ -87,11 +214,18 @@ class ClickHouseManager:
                     username=self.config.clickhouse_user,
                     password=self.config.clickhouse_pass
                 )
+                self._client.command('SELECT 1')
                 logger.info(f"Connected to ClickHouse at {self.config.clickhouse_host}:{self.config.clickhouse_port}")
+                self._clickhouse_available = True
             except Exception as e:
                 logger.error(f"Failed to connect to ClickHouse: {e}")
+                self._clickhouse_available = False
                 raise
         return self._client
+    
+    def is_available(self) -> bool:
+        """Check if ClickHouse is available."""
+        return self._clickhouse_available
     
     def close(self):
         """Close ClickHouse connection."""
@@ -99,6 +233,45 @@ class ClickHouseManager:
             self._client.close()
             self._client = None
             logger.info("ClickHouse connection closed")
+    
+    def flush_queue(self) -> int:
+        """
+        Flush queued messages to ClickHouse.
+        
+        Returns:
+            Number of messages successfully processed
+        """
+        if not self.is_available():
+            return 0
+            
+        messages = self.queue.dequeue_batch(batch_size=100)
+        if not messages:
+            return 0
+        
+        processed_ids = []
+        for msg in messages:
+            success = False
+            msg_type = msg['message_type']
+            payload = msg['payload']
+            
+            try:
+                if msg_type == 'packet':
+                    success = self.insert_packet(payload)
+                elif msg_type == 'advert':
+                    success = self.insert_advert(payload)
+                elif msg_type == 'status':
+                    success = self.insert_status(payload)
+                
+                if success:
+                    processed_ids.append(msg['id'])
+            except Exception as e:
+                logger.error(f"Failed to process queued message {msg['id']}: {e}")
+        
+        if processed_ids:
+            self.queue.delete_messages(processed_ids)
+            logger.info(f"Flushed {len(processed_ids)} messages from queue")
+        
+        return len(processed_ids)
     
     def insert_packet(self, packet_data: Dict[str, Any]) -> bool:
         """
@@ -117,7 +290,12 @@ class ClickHouseManager:
                 logger.warning(f"Invalid packet received: {packet_data.get('origin', 'unknown')}")
                 return False
             
-            client = self.get_client()
+            try:
+                client = self.get_client()
+            except Exception:
+                # ClickHouse unavailable, queue the message
+                logger.warning("ClickHouse unavailable, queueing packet message")
+                return self.queue.enqueue('packet', packet_data)
             
             columns = [
                 'mesh_timestamp', 'broker', 'topic', 'origin', 'origin_pubkey',
@@ -173,7 +351,12 @@ class ClickHouseManager:
                 logger.warning(f"Invalid advert received: {packet_data.get('origin', 'unknown')}")
                 return False
             
-            client = self.get_client()
+            try:
+                client = self.get_client()
+            except Exception:
+                # ClickHouse unavailable, queue the message
+                logger.warning("ClickHouse unavailable, queueing advert message")
+                return self.queue.enqueue('advert', packet_data)
             
             payload_decoded = advert['payload']['decoded']
             app_data = payload_decoded['appData']
@@ -251,7 +434,12 @@ class ClickHouseManager:
             True if successful, False otherwise
         """
         try:
-            client = self.get_client()
+            try:
+                client = self.get_client()
+            except Exception:
+                # ClickHouse unavailable, queue the message
+                logger.warning("ClickHouse unavailable, queueing status message")
+                return self.queue.enqueue('status', status_data)
             
             stats = status_data.get('stats', {})
             broker_url = f"tcp://{self.config.mqtt_host}:{self.config.mqtt_port}"
@@ -330,9 +518,30 @@ class MeshCoreIngester:
     
     def __init__(self, config: Config):
         self.config = config
-        self.db_manager = ClickHouseManager(config)
+        self.queue = PersistentQueue()
+        self.db_manager = ClickHouseManager(config, self.queue)
         self.mqtt_client: Optional[mqtt.Client] = None
         self._running = False
+        self._flush_thread: Optional[threading.Thread] = None
+    
+    def _flush_queue_loop(self):
+        """Background thread that periodically flushes the queue."""
+        while self._running:
+            try:
+                queue_size = self.queue.get_queue_size()
+                if queue_size > 0:
+                    logger.info(f"Queue size: {queue_size}, attempting to flush...")
+                    flushed = self.db_manager.flush_queue()
+                    if flushed == 0 and queue_size > 0:
+                        logger.warning("Failed to flush queue, ClickHouse may be unavailable")
+            except Exception as e:
+                logger.error(f"Error in queue flush loop: {e}")
+            
+            # Sleep for 30 seconds before next flush attempt
+            for _ in range(30):
+                if not self._running:
+                    break
+                time.sleep(1)
     
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: Dict, 
                     reason_code: int, properties: Any):
@@ -411,6 +620,12 @@ class MeshCoreIngester:
             
             # Start the loop
             self._running = True
+            
+            # Start queue flushing thread
+            self._flush_thread = threading.Thread(target=self._flush_queue_loop, daemon=True)
+            self._flush_thread.start()
+            logger.info("Started queue flushing thread")
+            
             logger.info("MeshCore Ingester started. Press Ctrl+C to stop.")
             self.mqtt_client.loop_forever()
             
@@ -428,11 +643,17 @@ class MeshCoreIngester:
             logger.info("Stopping MeshCore Ingester...")
             self._running = False
             
+            # Wait for flush thread to finish
+            if self._flush_thread and self._flush_thread.is_alive():
+                logger.info("Waiting for queue flush thread to finish...")
+                self._flush_thread.join(timeout=5)
+            
             if self.mqtt_client:
                 self.mqtt_client.disconnect()
                 self.mqtt_client.loop_stop()
             
             self.db_manager.close()
+            self.queue.close()
             logger.info("MeshCore Ingester stopped")
 
 
