@@ -43,6 +43,7 @@ class Config:
     clickhouse_port: int
     clickhouse_user: str
     clickhouse_pass: str
+    clickhouse_db: str
     
     # MQTT settings
     mqtt_host: str
@@ -63,6 +64,7 @@ class Config:
                 clickhouse_port=int(os.environ['CLICKHOUSE_PORT']),
                 clickhouse_user=os.environ['CLICKHOUSE_USER'],
                 clickhouse_pass=os.environ['CLICKHOUSE_PASS'],
+                clickhouse_db=os.environ.get('CLICKHOUSE_DB', 'default'),
                 mqtt_host=os.environ['MQTT_HOST'],
                 mqtt_port=int(os.environ['MQTT_PORT']),
                 mqtt_user=os.environ['MQTT_USER'],
@@ -217,9 +219,10 @@ class ClickHouseManager:
                     host=self.config.clickhouse_host,
                     port=self.config.clickhouse_port,
                     username=self.config.clickhouse_user,
-                    password=self.config.clickhouse_pass
+                    password=self.config.clickhouse_pass,
+                    database=self.config.clickhouse_db,
                 )
-                logger.info(f"Connected to ClickHouse at {self.config.clickhouse_host}:{self.config.clickhouse_port}")
+                logger.info(f"Connected to ClickHouse at {self.config.clickhouse_host}:{self.config.clickhouse_port}/{self.config.clickhouse_db}")
             self._client.command('SELECT 1')
             self._clickhouse_available = True
         except Exception as e:
