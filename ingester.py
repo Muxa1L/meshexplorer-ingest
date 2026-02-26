@@ -591,8 +591,8 @@ class ClickHouseManager:
             return
 
         msg_hash = packet_dict.get('messageHash', '')
-        # if msg_hash and msg_hash in seen:
-        #     return
+        if msg_hash and msg_hash in seen:
+            return
 
         try:
             payload_bytes = bytes.fromhex(packet_dict['payload']['raw'])
