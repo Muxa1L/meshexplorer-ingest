@@ -5,6 +5,7 @@ Subscribes to MQTT topics and ingests MeshCore packets into ClickHouse database.
 """
 
 import os
+import re
 import sys
 import json
 import logging
@@ -12,6 +13,7 @@ import binascii
 import sqlite3
 import threading
 import time
+from collections import deque
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from dataclasses import dataclass
@@ -20,9 +22,21 @@ from pathlib import Path
 import paho.mqtt.client as mqtt
 import clickhouse_connect
 from clickhouse_connect.driver import Client as ClickHouseClient
+from Crypto.Cipher import AES
 
 from meshcoredecoder import MeshCoreDecoder
 from meshcoredecoder.types.enums import PayloadType
+
+
+WARDRIVE_COORD_PAIR = re.compile(
+    r"""
+    (?P<lat>[+-]?\d+(?:\.\d+)?)        # latitude number
+    \s*,?\s+                           # whitespace (optional comma)
+    (?P<lon>[+-]?\d+(?:\.\d+)?)        # longitude number
+    (\s+(?P<ignored>[0-9a-fA-F]{2}))?  # optional ignored repeater id
+    """,
+    re.VERBOSE,
+)
 
 
 # Configure logging
@@ -54,7 +68,11 @@ class Config:
     
     # Queue settings
     queue_db_path: str = "queue.db"
-    
+
+    # Wardrive settings (optional)
+    wardrive_channel_hash: Optional[str] = None   # 1-byte channel hash as 2-char hex
+    wardrive_channel_secret: Optional[str] = None  # 16-byte AES-ECB key as hex
+
     @classmethod
     def from_env(cls) -> 'Config':
         """Load configuration from environment variables."""
@@ -70,7 +88,9 @@ class Config:
                 mqtt_user=os.environ['MQTT_USER'],
                 mqtt_pass=os.environ['MQTT_PASS'],
                 mqtt_topic=os.environ['MQTT_TOPIC'],
-                queue_db_path=os.environ.get('QUEUE_DB_PATH', 'queue.db')
+                queue_db_path=os.environ.get('QUEUE_DB_PATH', 'queue.db'),
+                wardrive_channel_hash=os.environ.get('WARDRIVE_CHANNEL_HASH'),
+                wardrive_channel_secret=os.environ.get('WARDRIVE_CHANNEL_SECRET'),
             )
         except KeyError as e:
             logger.error(f"Missing required environment variable: {e}")
@@ -270,6 +290,10 @@ class ClickHouseManager:
                     success = self.insert_advert(payload)
                 elif msg_type == 'status':
                     success = self.insert_status(payload)
+                elif msg_type == 'wardrive_sample_mesh':
+                    success = self.insert_wardrive_sample_mesh(
+                        payload['lat'], payload['lon'], payload['repeater']
+                    )
                 
                 if success:
                     processed_ids.append(msg['id'])
@@ -521,6 +545,106 @@ class ClickHouseManager:
             logger.error(f"Failed to insert status: {e}", exc_info=True)
             return False
 
+    def insert_wardrive_sample_mesh(self, lat: float, lon: float, repeater: str) -> bool:
+        """
+        Insert a wardrive GPS sample into wardrive_sample_mesh.
+
+        Args:
+            lat: Latitude
+            lon: Longitude
+            repeater: 2-char hex prefix of the first repeater in path
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            try:
+                client = self.get_client()
+            except Exception:
+                logger.warning("ClickHouse unavailable, queueing wardrive sample")
+                return self.queue.enqueue('wardrive_sample_mesh', {'lat': lat, 'lon': lon, 'repeater': repeater})
+
+            client.insert('wardrive_sample_mesh', [[lat, lon, repeater]], column_names=['lat', 'lon', 'repeater'])
+            logger.debug(f"Inserted wardrive sample: {lat},{lon} via {repeater}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to insert wardrive sample: {e}", exc_info=True)
+            return False
+
+    def try_wardrive_sample_mesh(
+        self, packet_data: Dict[str, Any], packet_dict: Dict[str, Any], seen: deque
+    ) -> None:
+        """
+        Attempt to decode and store a GROUP_MSG packet as a wardrive GPS sample.
+
+        Decrypts the channel payload with AES-ECB using the configured secret,
+        extracts lat/lon via regex, and writes to wardrive_sample_mesh.
+
+        Args:
+            packet_data: Raw MQTT JSON data
+            packet_dict: Decoded packet from MeshCoreDecoder.to_dict()
+            seen: Deque of recently-processed message hashes (deduplication)
+        """
+        channel_hash = self.config.wardrive_channel_hash
+        channel_secret = self.config.wardrive_channel_secret
+        if not channel_hash or not channel_secret:
+            return
+
+        msg_hash = packet_dict.get('messageHash', '')
+        if msg_hash and msg_hash in seen:
+            return
+
+        try:
+            payload_bytes = bytes.fromhex(packet_dict['payload']['raw'])
+
+            # Layout: [channel_hash:1][mac:2][encrypted:...]
+            if len(payload_bytes) < 4:
+                return
+            pkt_channel_hash = payload_bytes[0:1].hex()
+            if pkt_channel_hash != channel_hash:
+                return
+            encrypted = payload_bytes[3:]
+            if len(encrypted) == 0 or len(encrypted) % 16 != 0:
+                return
+
+            secret = bytes.fromhex(channel_secret)
+            cipher = AES.new(secret, AES.MODE_ECB)
+            decrypted = cipher.decrypt(encrypted)
+
+            # First 5 bytes are header; rest is plaintext
+            plain_text = decrypted[5:].decode('utf-8', 'ignore').replace('\0', '').lower()
+
+            match = WARDRIVE_COORD_PAIR.search(plain_text)
+            if not match:
+                return
+
+            lat = float(match.group('lat'))
+            lon = float(match.group('lon'))
+
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                logger.debug(f"Wardrive: invalid coordinates {lat},{lon}")
+                return
+
+            # Build path: relay hops from packet + observer prefix
+            path_hex = ''.join(packet_dict.get('path') or [])
+            path_hex += packet_data.get('origin_id', '')[:2].lower()
+            first_repeater = path_hex[:2]
+
+            # If the message includes a repeater ID to ignore (mobile repeater case),
+            # skip the first hop and use the second one instead.
+            ignored = match.group('ignored')
+            if ignored and first_repeater == ignored:
+                logger.debug(f"Wardrive: ignoring first hop {ignored}, using {path_hex[2:4]}")
+                first_repeater = path_hex[2:4]
+
+            self.insert_wardrive_sample_mesh(lat, lon, first_repeater)
+
+            if msg_hash:
+                seen.append(msg_hash)
+
+        except Exception as e:
+            logger.error(f"Failed to process wardrive sample: {e}", exc_info=True)
+
 
 class MeshCoreIngester:
     """Main ingester class that handles MQTT subscriptions and message processing."""
@@ -532,6 +656,7 @@ class MeshCoreIngester:
         self.mqtt_client: Optional[mqtt.Client] = None
         self._running = False
         self._flush_thread: Optional[threading.Thread] = None
+        self._wardrive_seen: deque = deque(maxlen=100)
     
     def _flush_queue_loop(self):
         """Background thread that periodically flushes the queue."""
@@ -599,10 +724,16 @@ class MeshCoreIngester:
                 
                 # Insert packet data
                 self.db_manager.insert_packet(data)
-                
+
+                packet_dict = packet.to_dict()
+
                 # Insert advert if present
                 if packet.payload_type == PayloadType.Advert and packet.payload.get('decoded'):
                     self.db_manager.insert_advert(data)
+
+                # Handle wardrive channel messages (GROUP_MSG = type 5)
+                if packet_dict.get('payloadType') == 5 and self.config.wardrive_channel_hash:
+                    self.db_manager.try_wardrive_sample_mesh(data, packet_dict, self._wardrive_seen)
             else:
                 logger.warning(f"Received message on unknown subtopic: {msg.topic}")
                 
