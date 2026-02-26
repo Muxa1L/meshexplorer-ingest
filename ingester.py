@@ -290,8 +290,8 @@ class ClickHouseManager:
                     success = self.insert_advert(payload)
                 elif msg_type == 'status':
                     success = self.insert_status(payload)
-                elif msg_type == 'wardrive_sample_mesh':
-                    success = self.insert_wardrive_sample_mesh(
+                elif msg_type == 'wardrive_samples_mesh':
+                    success = self.insert_wardrive_samples_mesh(
                         payload['lat'], payload['lon'], payload['repeater']
                     )
                 
@@ -545,9 +545,9 @@ class ClickHouseManager:
             logger.error(f"Failed to insert status: {e}", exc_info=True)
             return False
 
-    def insert_wardrive_sample_mesh(self, lat: float, lon: float, repeater: str) -> bool:
+    def insert_wardrive_samples_mesh(self, lat: float, lon: float, repeater: str) -> bool:
         """
-        Insert a wardrive GPS sample into wardrive_sample_mesh.
+        Insert a wardrive GPS sample into wardrive_samples_mesh.
 
         Args:
             lat: Latitude
@@ -562,23 +562,23 @@ class ClickHouseManager:
                 client = self.get_client()
             except Exception:
                 logger.warning("ClickHouse unavailable, queueing wardrive sample")
-                return self.queue.enqueue('wardrive_sample_mesh', {'lat': lat, 'lon': lon, 'repeater': repeater})
+                return self.queue.enqueue('wardrive_samples_mesh', {'lat': lat, 'lon': lon, 'repeater': repeater})
 
-            client.insert('wardrive_sample_mesh', [[lat, lon, repeater]], column_names=['lat', 'lon', 'repeater'])
+            client.insert('wardrive_samples_mesh', [[lat, lon, repeater]], column_names=['lat', 'lon', 'repeater'])
             logger.debug(f"Inserted wardrive sample: {lat},{lon} via {repeater}")
             return True
         except Exception as e:
             logger.error(f"Failed to insert wardrive sample: {e}", exc_info=True)
             return False
 
-    def try_wardrive_sample_mesh(
+    def try_wardrive_samples_mesh(
         self, packet_data: Dict[str, Any], packet_dict: Dict[str, Any], seen: deque
     ) -> None:
         """
         Attempt to decode and store a GROUP_MSG packet as a wardrive GPS sample.
 
         Decrypts the channel payload with AES-ECB using the configured secret,
-        extracts lat/lon via regex, and writes to wardrive_sample_mesh.
+        extracts lat/lon via regex, and writes to wardrive_samples_mesh.
 
         Args:
             packet_data: Raw MQTT JSON data
@@ -637,7 +637,7 @@ class ClickHouseManager:
                 logger.debug(f"Wardrive: ignoring first hop {ignored}, using {path_hex[2:4]}")
                 first_repeater = path_hex[2:4]
 
-            self.insert_wardrive_sample_mesh(lat, lon, first_repeater)
+            self.insert_wardrive_samples_mesh(lat, lon, first_repeater)
 
             if msg_hash:
                 seen.append(msg_hash)
@@ -733,7 +733,7 @@ class MeshCoreIngester:
 
                 # Handle wardrive channel messages (GROUP_MSG = type 5)
                 if packet_dict.get('payloadType') == 5 and self.config.wardrive_channel_hash:
-                    self.db_manager.try_wardrive_sample_mesh(data, packet_dict, self._wardrive_seen)
+                    self.db_manager.try_wardrive_samples_mesh(data, packet_dict, self._wardrive_seen)
             else:
                 logger.warning(f"Received message on unknown subtopic: {msg.topic}")
                 
