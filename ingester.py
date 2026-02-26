@@ -591,8 +591,8 @@ class ClickHouseManager:
             return
 
         msg_hash = packet_dict.get('messageHash', '')
-        if msg_hash and msg_hash in seen:
-            return
+        # if msg_hash and msg_hash in seen:
+        #     return
 
         try:
             payload_bytes = bytes.fromhex(packet_dict['payload']['raw'])
@@ -732,7 +732,7 @@ class MeshCoreIngester:
                     self.db_manager.insert_advert(data)
 
                 # Handle wardrive channel messages (GROUP_MSG = type 5)
-                if packet_dict.get('payloadType') == 5 and self.config.wardrive_channel_hash:
+                if packet.payload_type == PayloadType.GroupText and self.config.wardrive_channel_hash:
                     self.db_manager.try_wardrive_samples_mesh(data, packet_dict, self._wardrive_seen)
             else:
                 logger.warning(f"Received message on unknown subtopic: {msg.topic}")
