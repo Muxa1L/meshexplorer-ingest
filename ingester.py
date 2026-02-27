@@ -637,7 +637,7 @@ class ClickHouseManager:
                 logger.debug(f"Wardrive: ignoring first hop {ignored}, using {path_hex[2:4]}")
                 first_repeater = path_hex[2:4]
 
-            self.insert_wardrive_samples_mesh(lat, lon, first_repeater)
+            self.insert_wardrive_samples_mesh(lat, lon, first_repeater.lower())
 
             if msg_hash:
                 seen.append(msg_hash)
