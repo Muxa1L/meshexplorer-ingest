@@ -317,7 +317,7 @@ class ClickHouseManager:
             True if successful, False otherwise
         """
         try:
-            packet = MeshCoreDecoder.decode(packet_data['data']).to_dict()
+            packet = MeshCoreDecoder.decode(packet_data['raw']).to_dict()
             
             if not packet['isValid']:
                 logger.warning(f"Invalid packet received: {packet_data.get('origin', 'unknown')}")
@@ -345,12 +345,12 @@ class ClickHouseManager:
                 packet_data['origin'],
                 binascii.unhexlify(packet_data['origin_id']),
                 packet['messageHash'],
-                binascii.unhexlify(packet_data['data']),
+                binascii.unhexlify(packet_data['raw']),
                 binascii.unhexlify(packet['payload']['raw']),
                 packet['routeType'],
                 packet['payloadType'],
                 packet['payloadVersion'],
-                packet_data['data'][:2],  # header
+                packet_data['raw'][:2],  # header
                 packet['pathLength']
             ]
             
@@ -378,7 +378,7 @@ class ClickHouseManager:
             True if successful, False otherwise
         """
         try:
-            advert = MeshCoreDecoder.decode(packet_data['data']).to_dict()
+            advert = MeshCoreDecoder.decode(packet_data['raw']).to_dict()
             
             if not advert['isValid']:
                 logger.warning(f"Invalid advert received: {packet_data.get('origin', 'unknown')}")
@@ -684,9 +684,9 @@ class MeshCoreIngester:
             logger.info(f"Connected to MQTT broker at {self.config.mqtt_host}:{self.config.mqtt_port}")
             
             # Subscribe to topics
-            raw_topic = f"{self.config.mqtt_topic}/+/raw"
-            client.subscribe(raw_topic)
-            logger.info(f"Subscribed to topic: {raw_topic}")
+            packets_topic = f"{self.config.mqtt_topic}/+/packets"
+            client.subscribe(packets_topic)
+            logger.info(f"Subscribed to topic: {packets_topic}")
             
             status_topic = f"{self.config.mqtt_topic}/+/status"
             client.subscribe(status_topic)
@@ -711,9 +711,9 @@ class MeshCoreIngester:
                 # Handle status message
                 self.db_manager.insert_status(data)
                 
-            elif msg.topic.endswith('/raw'):
+            elif msg.topic.endswith('/packets'):
                 # Handle raw packet message
-                hex_data = data.get('data')
+                hex_data = data.get('raw')
                 
                 if not hex_data:
                     logger.warning(f"Received message without data field on topic {msg.topic}")
