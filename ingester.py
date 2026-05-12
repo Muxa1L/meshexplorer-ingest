@@ -48,6 +48,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+CLICKHOUSE_INSERT_SETTINGS = {'async_insert': True}
+
+
 @dataclass
 class Config:
     """Application configuration loaded from environment variables."""
@@ -359,7 +362,12 @@ class ClickHouseManager:
                 columns.append('path')
                 data.append(binascii.unhexlify(''.join(packet['path'])))
             
-            client.insert('meshcore_packets', [data], column_names=columns)
+            client.insert(
+                'meshcore_packets',
+                [data],
+                column_names=columns,
+                settings=CLICKHOUSE_INSERT_SETTINGS,
+            )
             logger.debug(f"Inserted packet: {packet['messageHash']}")
             return True
             
@@ -448,7 +456,12 @@ class ClickHouseManager:
                 binascii.unhexlify(advert['messageHash'])
             ])
             
-            client.insert('meshcore_adverts', [data], column_names=columns)
+            client.insert(
+                'meshcore_adverts',
+                [data],
+                column_names=columns,
+                settings=CLICKHOUSE_INSERT_SETTINGS,
+            )
             logger.info(f"Inserted advert from: {app_data['name']}")
             return True
             
@@ -537,7 +550,12 @@ class ClickHouseManager:
                     columns.append('rx_air_secs')
                     data.append(stats['rx_air_secs'])
             
-            client.insert('meshcore_status', [data], column_names=columns)
+            client.insert(
+                'meshcore_status',
+                [data],
+                column_names=columns,
+                settings=CLICKHOUSE_INSERT_SETTINGS,
+            )
             logger.info(f"Inserted status from: {status_data['origin']}")
             return True
             
@@ -564,7 +582,12 @@ class ClickHouseManager:
                 logger.warning("ClickHouse unavailable, queueing wardrive sample")
                 return self.queue.enqueue('wardrive_samples_mesh', {'lat': lat, 'lon': lon, 'repeater': repeater})
 
-            client.insert('wardrive_samples_mesh', [[lat, lon, repeater]], column_names=['lat', 'lon', 'repeater'])
+            client.insert(
+                'wardrive_samples_mesh',
+                [[lat, lon, repeater]],
+                column_names=['lat', 'lon', 'repeater'],
+                settings=CLICKHOUSE_INSERT_SETTINGS,
+            )
             logger.debug(f"Inserted wardrive sample: {lat},{lon} via {repeater}")
             return True
         except Exception as e:
