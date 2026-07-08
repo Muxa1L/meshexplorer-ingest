@@ -340,9 +340,10 @@ class ClickHouseManager:
             ]
             
             broker_url = f"tcp://{self.config.mqtt_host}:{self.config.mqtt_port}"
-            
+            if ('+00' not in packet_data['timestamp']):
+                packet_data['timestamp'] = packet_data['timestamp'] + '+00:00'
             data = [
-                packet_data['timestamp']+'+00',
+                packet_data['timestamp'],
                 broker_url,
                 self.config.mqtt_topic.lower(),
                 packet_data['origin'],
@@ -494,9 +495,10 @@ class ClickHouseManager:
                 'timestamp', 'broker', 'topic', 'origin', 'origin_pubkey',
                 'status', 'model', 'firmware_version', 'radio', 'client_version'
             ]
-            
+            if ('+00' not in status_data['timestamp']):
+                status_data['timestamp'] = status_data['timestamp'] + '+00:00'
             data = [
-                status_data['timestamp']+'+00',
+                status_data['timestamp'],
                 broker_url,
                 self.config.mqtt_topic.lower(),
                 status_data['origin'],
